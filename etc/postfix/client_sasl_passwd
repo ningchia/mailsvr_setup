@@ -1,0 +1,3 @@
+#[smtp-relay.brevo.com]:587      smtp_username:smtp_password
+[smtp-relay.brevo.com]:587      mydomain_brevo_account@gmail.com:<pswd>
+

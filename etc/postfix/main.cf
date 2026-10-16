@@ -1,0 +1,190 @@
+# 參考 /usr/share/postfix/main.cf.dist 以獲取包含完整註解的預設版本
+
+# 【設定與修改說明】：
+# 1. 安裝完成後，若想重新觸發互動式設定精靈，可執行指令："dpkg-reconfigure postfix"
+# 2. 每次修改完 main.cf 後，務必執行 "postfix reload" 或 "systemctl restart postfix" 讓變更生效。
+# 3. 除了直接編輯本檔案外，也可以透過指令動態修改，例如："postconf -e 'home_mailbox = Maildir/'"
+
+# ==========================================
+# 基本宣告與版本控制
+# ==========================================
+smtpd_banner = $myhostname ESMTP $mail_name (Ubuntu)
+biff = no
+
+# MUA (郵件客戶端) 會負責補上網域尾綴，此處設為 no
+append_dot_mydomain = no
+
+# 取消下方註解可在發生延遲寄送時產生警告
+#delay_warning_time = 4h
+
+readme_directory = no
+
+# 新安裝預設為相容等級 2 (請參閱 Postfix 官方相容性說明)
+compatibility_level = 2
+
+# ==========================================
+# TLS 加密與 Let's Encrypt 憑證設定
+# ==========================================
+# 【憑證申請與設定步驟】：
+# 1. 安裝 certbot: apt install certbot
+# 2. 開放 TCP Port 80 (Let's Encrypt 進行 http-01 驗證所需，記得同時放行主機防火牆與雲端安全群組如 Azure NSG):
+#    例如: ufw allow 80
+# 3. 執行獨立憑證申請指令:
+#    certbot certonly --standalone --rsa-key-size 4096 --agree-tos --preferred-challenges http -d <domain>
+# 4. Certbot 會將憑證存放在 /etc/letsencrypt/live/<domain>/ 底下。
+#    請將下方的 smtpd_tls_cert_file 與 smtpd_tls_key_file 指向對應的 fullchain.pem 與 privkey.pem。
+# 5. 重啟 Postfix: systemctl restart postfix (or postfix reload)
+# 6. Let's Encrypt 憑證效期為 90 天，系統會透過 cron 自動在到期前 30 天進行續期。
+
+# TLS 參數設定（正式環境建議替換為 Let's Encrypt 正式憑證路徑）
+smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
+smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key
+
+# 強制要求全面採用 TLS 加密連線 (取代過時的 smtpd_use_tls = yes)
+smtpd_tls_security_level = encrypt
+
+smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache
+smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
+
+# ==========================================
+# 網域識別與本機收件範圍 (Domain Classes)
+# ==========================================
+smtpd_relay_restrictions = permit_mynetworks permit_sasl_authenticated defer_unauth_destination
+
+# "myorigin": 決定從本機「發出」的郵件，寄件者網域要顯示什麼
+#   - $myhostname: 顯示 user@主機名稱
+#   - $mydomain: 顯示 user@大網域 (推薦)
+#   - /etc/mailname: 讀取檔案第一行作為預設寄件者網域 (Debian/Ubuntu 預設)
+# 這邊的 myhostname 與 mydomain 只是place holder.
+# 我們會在啟動時的docker設定環境變數 POSTFIX_HOST_NAME 與 POSTFIX_DOMAIN_NAME, 再用 
+#   postconf -e "myhostname = $POSTFIX_HOST_NAME" 
+#   postconf -e "mydomain = $POSTFIX_DOMAIN_NAME" 
+# 來覆寫他們.
+myhostname = just_a_place_holder
+mydomain = just_a_place_holder
+myorigin = $mydomain
+
+# "mydestination": 定義哪些網域視為「本機家裡」，信件要直接留在本地處理。常見情境有：
+#   - ex1 (預設): 只接收給本機主機名或 localhost 的信
+#   - ex2 (網域級伺服器): 將整個大網域 ($mydomain) 也納入本地接收範圍
+#   - ex3 (多 A 記錄主機): 連帶把 www、ftp 等子網域的系統通知信也一併留在本地收下
+#   - 範例設定：
+#     ex1: mydestination = $myhostname localhost.$mydomain localhost
+#     ex2: mydestination = $myhostname localhost.$mydomain localhost $mydomain
+#     ex3: mydestination = $myhostname localhost.$mydomain localhost www.$mydomain ftp.$mydomain
+mydestination = $myhostname, localhost.localdomain, localhost
+
+# "mynetworks": 定義受信任的內部網段，內部機器寄信不需要 SASL 驗證
+mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
+
+# ==========================================
+# 郵件儲存格式與限制
+# ==========================================
+# 關於 Maildir 結構與 s-nail 設定說明：
+# 1. "~/maildir/[new|tmp|cur]" 結構說明：
+#    - tmp: 郵件正在寫入硬碟時的暫存區。
+#    - new: 郵件寫入完成、尚未被使用者讀取的新信。
+#    - cur: 使用者已經打開閱讀過、或是被標記為已讀的信件存放區。
+# 2. 如何讓 s-nail 認得 Maildir 格式：
+#    必須在 /etc/s-nail.rc 中加入以下設定讓其支援 Maildir 與初始化：
+#    - set emptystart (允許用戶端在收件匣為空時也能正常打開)
+#    - set folder=Maildir (指定內部變數的郵件資料夾)
+#    - set record=+sent (指定將發出的信件備份存放在 Maildir 目錄中)
+home_mailbox = Maildir/
+
+# 限制每個本機使用者信箱大小上限 (單位：位元組，此處約 1MB，生產環境可依需求調大)
+mailbox_size_limit = 1000000
+
+recipient_delimiter = +
+inet_interfaces = all
+inet_protocols = all
+
+# ==========================================
+# Dovecot SASL 驗證整合 (伺服器端)
+# ==========================================
+# 各項 SASL 參數意義：
+# - smtpd_sasl_type = dovecot: 指定 Postfix 不要用預設的 Cyrus SASL，改用 Dovecot 進行密碼驗證。
+# - smtpd_sasl_path = private/auth: 定義與 Dovecot 通訊的 Unix Socket 路徑（相對於 Postfix 佇列目錄 /var/spool/postfix）。
+# - smtpd_sasl_auth_enable = yes: 正式啟動 SMTP 伺服器的 SASL 認證功能。
+# - broken_sasl_auth_clients = yes: 為了相容舊版郵件客戶端（如舊版 Outlook）對於 AUTH 宣告格式的特殊需求。
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+smtpd_sasl_auth_enable = yes
+broken_sasl_auth_clients = yes
+
+# ==========================================
+# SMTP 伺服器安全性與收信防線策略
+# ==========================================
+# 規定必須先建立 TLS 加密連線，才能允許發送密碼驗證
+smtpd_tls_auth_only = yes
+
+# SMTP 伺服器接收信件的存取控管防線 (防止伺服器成為 Open Relay 垃圾郵件跳板)：
+# 1. permit_mynetworks: 放行受信任的內部網段
+# 2. permit_sasl_authenticated: 放行通過 Dovecot SASL 認證的合法使用者
+# 3. reject_unauth_destination: 嚴格拒絕既非自己人、又未登入、且收件網域不屬於本機管轄的郵件
+smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination
+
+# ==========================================
+# 虛擬信箱與虛擬網域 (Virtual Mailbox & Alias)
+# ==========================================
+# 三種網域類別的核心差異說明：
+# 1. Virtual Alias Domain (虛擬別名網域)：只做轉向/轉發（把 A 改寫成 B），本身不提供硬碟信箱儲存。
+# 2. Virtual Mailbox Domain (虛擬信箱網域)：真正擁有獨立信箱與硬碟儲存空間（通常由 Dovecot 管理），但使用者不需要 Linux 系統帳號。
+# 3. Relay Domain (轉發網域)：本機既不收信也不存信，只擔任中繼站，將收到的信原封不動轉發給後端真正的主機。
+#
+# 指定虛擬信箱網域的最終傳輸管道為 dovecot
+virtual_transport = dovecot
+virtual_mailbox_domains = $mydomain
+
+# 啟用虛擬別名對應表 (用來將 postmaster/root 等管理信件重新導向給真實管理員)
+# 【注意】修改後務必執行：postmap /etc/postfix/virtualmap 與 newaliases
+virtual_alias_maps = hash:/etc/postfix/virtualmap
+
+# 【工程筆記：關於 Dovecot-LDA 處理系統使用者】
+# 如果要讓傳統 Linux 系統使用者也透過 dovecot-lda 進行投遞與容量檢查，可開啟此行：
+# mailbox_command = /usr/lib/dovecot/dovecot-lda -f "$SENDER" -a "$RECIPIENT" -d "$USER"
+# 但實測發現透過 dovecot-lda 處理系統使用者會造成嚴重的同步延遲（新信要等數分鐘），
+# 故維持註解，讓系統使用者走預設投遞代理，新信才能即時秒到。
+
+# @LC@ 請用中文簡單介紹這一段 relay_domains跟relayhost的差別
+# "relay_domains" vs "relayhost" 核心差異說明：
+# - relay_domains (控制收信/Inbound)：定義哪些外部網域的信件可以送到我們這邊，然後我們幫忙轉發出去。
+# - relayhost (控制寄信/Outbound)：定義我們要把信件送到網際網路時，不要直接查 DNS MX，而是交給哪台外部指定的轉發中繼主機。
+#
+#   - relay_domains 相關範例：
+#     ex1: relay_domains = $mydestination (預設)
+#     ex2: relay_domains = (安全起見，絕不幫陌生人轉發)
+#     ex3: relay_domains = $mydomain (幫我的網域及子網域轉發)
+#
+#   - relayhost 相關範例：
+#     ex1: relayhost = (預設直接連線網際網路)
+#     ex2: relayhost = $mydomain (透過本地郵件集線器)
+#     ex3: relayhost = [mail.$mydomain] (透過指定主機，[] 代表不查 DNS MX)
+#     ex4: relayhost = [mail.isp.tld] (透過 ISP 供應商中繼站)
+
+# ==========================================
+# 第三方外寄轉發服務 (Relayhost，例如 Brevo)
+# ==========================================
+# 因多數雲端 ISP（如 Azure、AWS）封鎖對外 Port 25，無法直接寄信到外部，
+# 必須透過支援 SASL 認證的外部中繼站（如 Brevo）透過 Port 587 轉發出去。
+# 註：中括號 "[]" 代表不進行 DNS MX 查詢，直接連線至指定主機。
+#
+# 【安全性與設定提醒】：
+# 1. 於 /etc/postfix/client_sasl_passwd 填入帳號密碼。
+# 2. 執行 postmap /etc/postfix/client_sasl_passwd 產生 .db 檔。
+# 3. 務必修改權限為 600：chmod 600 /etc/postfix/client_sasl_passwd*
+relayhost = [smtp-relay.brevo.com]:587
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/client_sasl_passwd
+smtp_sasl_security_options = noanonymous
+smtp_tls_security_level = encrypt
+header_size_limit = 4096000
+
+# 【自動回覆 (Auto-reply) 實作方法說明】：
+# 1. 在 main.cf 中指定轉送對應表：
+#    transport_maps = hash:/etc/postfix/transport
+# 2. 在 /etc/postfix/transport 中指定特定信箱或網域走 autoreply 通道：
+#    autoreply.mydomain.tld    autoreply:
+# 3. 在 /etc/postfix/master.cf 中定義該自訂傳輸通道（透過 pipe 將信件交給外部程式處理）：
+#    autoreply unix  -       n       n       -       -       pipe 
+#        flags= user=nobody argv=/path/to/autoreply $sender $mailbox

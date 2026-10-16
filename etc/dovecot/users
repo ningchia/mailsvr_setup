@@ -1,0 +1,2 @@
+notroot@mydomain.com:{PLAIN}password::::::userdb_quota_rule=*:storage=100M
+
