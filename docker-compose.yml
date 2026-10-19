@@ -2,7 +2,10 @@ services:
   mail-server:
     build: .
     container_name: mail-server
-    hostname: mailer
+    hostname: ${POSTFIX_HOST_NAME}
+    environment:
+      - POSTFIX_HOST_NAME=${POSTFIX_HOST_NAME}
+      - POSTFIX_DOMAIN_NAME=${POSTFIX_DOMAIN_NAME}
     ports:
       - "25:25"
       - "587:587"
@@ -12,17 +15,42 @@ services:
       - "110:110"
       - "995:995"
     volumes:
+      # 將 Host 端的設定檔統一掛載進去，實現 Persistent
       - ./certs:/etc/letsencrypt
+      - ./certbot-webroot:/var/www/certbot
+      # 1. 系統層級設定檔
+      - ./mail_config/aliases:/etc/aliases
+      # 2. 不可以直接掛載整個 Postfix 設定資料夾, 否則 container裡原本安裝後的設定檔會"全部"消失,只會剩下這邊的這幾個.
+      - ./mail_config/postfix/main.cf:/etc/postfix/main.cf
+      - ./mail_config/postfix/master.cf:/etc/postfix/master.cf
+      - ./mail_config/postfix/virtualmap:/etc/postfix/virtualmap
+      - ./mail_config/postfix/client_sasl_passwd:/etc/postfix/client_sasl_passwd
+      # 3. 掛載 Dovecot 的 conf.d 與 users 檔
+      - ./mail_config/dovecot/conf.d/10-auth.conf:/etc/dovecot/conf.d/10-auth.conf
+      - ./mail_config/dovecot/conf.d/10-logging.conf:/etc/dovecot/conf.d/10-logging.conf  
+      - ./mail_config/dovecot/conf.d/10-mail.conf:/etc/dovecot/conf.d/10-mail.conf
+      - ./mail_config/dovecot/conf.d/10-master.conf:/etc/dovecot/conf.d/10-master.conf
+      - ./mail_config/dovecot/conf.d/10-ssl.conf:/etc/dovecot/conf.d/10-ssl.conf
+      - ./mail_config/dovecot/conf.d/20-pop3.conf:/etc/dovecot/conf.d/20-pop3.conf
+      - ./mail_config/dovecot/conf.d/auth-passwd.conf.ext:/etc/dovecot/conf.d/auth-passwd.conf.ext
+      - ./mail_config/dovecot/users:/etc/dovecot/users
     restart: always
 
   nginx:
     image: nginx:latest
     container_name: nginx-proxy
+    environment:
+      - POSTFIX_DOMAIN_NAME=${POSTFIX_DOMAIN_NAME}
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d
+      # 使用官方 Nginx 的 templates 機制自動替換環境變數
+      # # 官方的 Nginx 映像檔本身內建這個功能：只要把設定檔命名為 default.conf.template 並放在 /etc/nginx/templates/ 目錄下，
+      # Nginx 在啟動時就會自動讀取系統環境變數，把裡面的 ${POSTFIX_DOMAIN_NAME} 替換掉，並自動產生正式的 default.conf！
+      - ./nginx/conf.d:/etc/nginx/templates
       - ./certs:/etc/letsencrypt
+      # 2. 將 Host 端的 certbot-webroot 資料夾掛載進去，讓 Nginx 可以存取 Let's Encrypt 的 HTTP-01 驗證檔案
       - ./certbot-webroot:/var/www/certbot
     restart: always
+

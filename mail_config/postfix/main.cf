@@ -23,30 +23,6 @@ readme_directory = no
 compatibility_level = 2
 
 # ==========================================
-# TLS 加密與 Let's Encrypt 憑證設定
-# ==========================================
-# 【憑證申請與設定步驟】：
-# 1. 安裝 certbot: apt install certbot
-# 2. 開放 TCP Port 80 (Let's Encrypt 進行 http-01 驗證所需，記得同時放行主機防火牆與雲端安全群組如 Azure NSG):
-#    例如: ufw allow 80
-# 3. 執行獨立憑證申請指令:
-#    certbot certonly --standalone --rsa-key-size 4096 --agree-tos --preferred-challenges http -d <domain>
-# 4. Certbot 會將憑證存放在 /etc/letsencrypt/live/<domain>/ 底下。
-#    請將下方的 smtpd_tls_cert_file 與 smtpd_tls_key_file 指向對應的 fullchain.pem 與 privkey.pem。
-# 5. 重啟 Postfix: systemctl restart postfix (or postfix reload)
-# 6. Let's Encrypt 憑證效期為 90 天，系統會透過 cron 自動在到期前 30 天進行續期。
-
-# TLS 參數設定（正式環境建議替換為 Let's Encrypt 正式憑證路徑）
-smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
-smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key
-
-# 強制要求全面採用 TLS 加密連線 (取代過時的 smtpd_use_tls = yes)
-smtpd_tls_security_level = encrypt
-
-smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache
-smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
-
-# ==========================================
 # 網域識別與本機收件範圍 (Domain Classes)
 # ==========================================
 smtpd_relay_restrictions = permit_mynetworks permit_sasl_authenticated defer_unauth_destination
@@ -76,6 +52,30 @@ mydestination = $myhostname, localhost.localdomain, localhost
 
 # "mynetworks": 定義受信任的內部網段，內部機器寄信不需要 SASL 驗證
 mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
+
+# ==========================================
+# TLS 加密與 Let's Encrypt 憑證設定
+# ==========================================
+# 【憑證申請與設定步驟】：
+# 1. 安裝 certbot: apt install certbot
+# 2. 開放 TCP Port 80 (Let's Encrypt 進行 http-01 驗證所需，記得同時放行主機防火牆與雲端安全群組如 Azure NSG):
+#    例如: ufw allow 80
+# 3. 執行獨立憑證申請指令:
+#    certbot certonly --standalone --rsa-key-size 4096 --agree-tos --preferred-challenges http -d <domain>
+# 4. Certbot 會將憑證存放在 /etc/letsencrypt/live/<domain>/ 底下。
+#    請將下方的 smtpd_tls_cert_file 與 smtpd_tls_key_file 指向對應的 fullchain.pem 與 privkey.pem。
+# 5. 重啟 Postfix: systemctl restart postfix (or postfix reload)
+# 6. Let's Encrypt 憑證效期為 90 天，系統會透過 cron 自動在到期前 30 天進行續期。
+
+# TLS 參數設定（正式環境建議替換為 Let's Encrypt 正式憑證路徑）
+smtpd_tls_cert_file = /etc/letsencrypt/live/$mydomain/fullchain.pem
+smtpd_tls_key_file = /etc/letsencrypt/live/$mydomain/privkey.pem
+
+# 強制要求全面採用 TLS 加密連線 (取代過時的 smtpd_use_tls = yes)
+smtpd_tls_security_level = encrypt
+
+smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache
+smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
 
 # ==========================================
 # 郵件儲存格式與限制
