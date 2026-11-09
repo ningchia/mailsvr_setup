@@ -13,7 +13,7 @@
 ## 目錄
 
 - [1. 這個 repo 主要是什麼](#1-這個-repo-主要是什麼)
-- [2. 先決條件](#2-先決條件)
+- [2. 開 VM、開防火牆與準備 DNS](#2-開-vm開防火牆與準備-dns)
   - [建議 DNS 設定](#建議-dns-設定)
   - [Azure 上的 DNS 設定範例](#azure-上的-dns-設定範例)
   - [SPF 記錄](#spf-記錄)
@@ -21,19 +21,28 @@
   - [DKIM 記錄](#dkim-記錄)
   - [Azure 的反向 DNS（PTR）與驗證](#azure-的反向-dnsptr-與驗證)
   - [Azure NSG / 防火牆要開放](#azure-nsg--防火牆要開放)
-- [3. 先修改環境變數](#3-先修改環境變數)
-- [4. 更新郵件使用者與別名](#4-更新郵件使用者與別名)
-- [5. 申請 Let's Encrypt 憑證](#5-申請-let-s-encrypt-憑證)
-  - [5.1 第一次申請完成後，請補上一個定期 renew 工作](#renew-ssl-cert)
-- [6. 啟動郵件伺服器](#6-啟動郵件伺服器)
-- [7. 這個 repo 啟動後會發生什麼](#7-這個-repo-啟動後會發生什麼)
-- [8. 如何新增一個信箱使用者](#8-如何新增一個信箱使用者)
-- [9. 如何修改外寄中繼設定](#9-如何修改外寄中繼設定)
-- [10. 常用驗證命令](#10-常用驗證命令)
-- [11. 新機器部署的最簡步驟](#11-新機器部署的最簡步驟)
-- [12. 維護與除錯建議](#12-維護與除錯建議)
-- [13. 一個簡單的總結](#13-一個簡單的總結)
-- [14. 你可以直接照這樣做](#14-你可以直接照這樣做)
+- [3. 修正 .env 與郵件設定檔](#3-修正-env-與郵件設定檔)
+  - [3.1 .env](#31-env)
+  - [3.2 設定 `mail_config/dovecot/users`](#32-設定-mail_configdovecotusers)
+  - [3.3 設定 `mail_config/aliases`](#33-設定-mail_configaliases)
+  - [3.4 設定 `mail_config/postfix/virtualmap`](#34-設定-mail_configpostfixvirtualmap)
+  - [3.5 設定 `mail_config/postfix/client_sasl_passwd`](#35-設定-mail_configpostfixclient_sasl_passwd)
+- [4. 啟動 postfix, dovecot, nginx](#4-啟動-postfix-dovecot-nginx)
+  - [4.1 新增/修改收信帳號](#41-新增修改收信帳號)
+  - [4.2 修改管理別名](#42-修改管理別名)
+  - [4.3 修改 Postfix 虛擬郵件表](#43-修改-postfix-虛擬郵件表)
+  - [4.4 執行 docker compose up 的細節](#44-執行-docker-compose-up-的細節)
+- [5. 為 mail server 申請 SSL 憑證](#5-為-mail-server-申請-ssl-憑證)
+- [6. 維護工作：容器重啟與健檢](#6-維護工作容器重啟與健檢)
+  - [6.1 需要時重啟容器](#61-需要時重啟容器)
+  - [6.2 新增/修改信箱使用者](#62-新增修改信箱使用者)
+  - [6.3 修改外寄中繼設定](#63-修改外寄中繼設定)
+  - [6.4 常用驗證命令](#64-常用驗證命令)
+- [7. Docker Compose 的作用](#7-docker-compose-的作用)
+- [8. 新機器部署的最簡步驟](#8-新機器部署的最簡步驟)
+- [9. 維護與除錯建議](#9-維護與除錯建議)
+- [10. 一個簡單的總結](#10-一個簡單的總結)
+- [11. 你可以直接照這樣做](#11-你可以直接照這樣做)
 
 ### 目錄結構
 
@@ -95,7 +104,7 @@ mailsvr_setup/
 
 ---
 
-## 2. 先決條件
+## 2. 開 VM、開防火牆與準備 DNS
 
 在真正啟動這個郵件伺服器之前，請先準備：
 
@@ -103,6 +112,9 @@ mailsvr_setup/
 2. Docker 與 Docker Compose 已安裝
 3. 你自己的網域，例如 `example.com`
 4. DNS 記錄已經設定好
+5. 防火牆 / Security Group 已放行 SMTP / IMAP / HTTP / HTTPS 所需通訊埠
+
+這一步的目標是：先讓 VM 能從網際網路看到、讓 hostname 能解析、讓 80 / 443 / 25 / 587 / 993 / 995 能通過，接著再開始修設定、啟動容器與申請 cert。
 
 ### 建議 DNS 設定
 
@@ -356,7 +368,9 @@ Non-authoritative answer:
 
 ---
 
-## 3. 先修改環境變數
+## 3. 修正 .env 與郵件設定檔
+
+在開好 VM / DNS / 防火牆後，下一步就是先把郵件相關設定檔修好。這一步要先完成，因為後續 `docker compose up`、`init_cert.sh` 都依賴這些值。
 
 進入專案目錄後，修改 `.env`：
 
@@ -383,7 +397,9 @@ SSL_ADMIN_EMAIL=admin@example.com
 
 ---
 
-## 4. 更新郵件使用者與別名
+## 4. 啟動 postfix, dovecot, nginx
+
+在 `.env` 與 `mail_config` 設定完成後，先把 docker compose 啟動起來。這裡的目的不是先申請 cert，而是先讓 nginx / 80 / ACME challenge 能跑起來，讓後續的首次證書申請有 HTTP 入口。
 
 這個 repo 內有幾個你必須先確認的設定檔。
 
@@ -440,9 +456,64 @@ abuse@example.com admin@example.com
 
 ---
 
-## 5. 申請 Let's Encrypt 憑證
+### 4.4 執行 docker compose up 的細節
 
-這份 repo 已經設計好 Webroot 模式，讓 Certbot 可以在公開網域上取得 SSL 憑證。
+在前面的設定都確認無誤後，正式啟動服務前，通常會在專案目錄中執行：
+
+```bash
+cd mailsvr_setup
+docker compose up --build -d
+```
+
+這個指令的含義是：
+
+- `docker compose`：使用 Docker Compose 來管理多個容器
+- `up`：建立或啟動定義出的服務
+- `--build`：在啟動前先重新建置映像檔，這能讓你剛修改過 `dockerfile`、`entrypoint.sh` 或基底設定時生效
+- `-d`：背景執行（detached mode），讓容器在後台持續運行
+
+這個專案裡，`docker-compose.yml` 定義了：
+
+- `mail-server`：執行 Postfix + Dovecot + Supervisor
+- `nginx`：提供 80 / 443 端口，讓 Certbot 可以做 HTTP-01 驗證
+
+因此，這一步的實際目的就是：
+
+1. 啟動 Postfix 與 Dovecot，讓郵件服務開始正常運作
+2. 啟動 Nginx，讓 `/.well-known/acme-challenge/` 可以被外部驗證
+3. 為後續申請 Let's Encrypt 憑證準備 HTTP 入口
+
+若要查看啟動狀態，可執行：
+
+```bash
+docker compose ps
+```
+
+若要查看整個啟動過程中出現的錯誤，可執行：
+
+```bash
+docker compose logs -f
+```
+
+若只看 mail-server 的日誌：
+
+```bash
+docker compose logs -f mail-server
+```
+
+若只看 nginx 的日誌：
+
+```bash
+docker compose logs -f nginx
+```
+
+> 這一段很重要：這不是「先做 SSL」而是「先把郵件服務和 HTTP 驗證入口準備好」。只有在 80 埠與 Nginx 正常運作之後，下一步的 `init_cert.sh` 才有辦法真的申請到憑證。
+
+---
+
+## 5. 為 mail server 申請 SSL 憑證
+
+這份 repo 已經設計好 Webroot 模式，讓 Certbot 可以在公開網域上取得 SSL 憑證。這一步應該在 `docker compose up --build -d` 之後、且 nginx 已開啟 80 埠時進行。
 
 先執行：
 
@@ -468,6 +539,8 @@ chmod +x init_cert.sh
 <a id="renew-ssl-cert"></a>
 
 ### 5.1 第一次申請完成後，請補上一個定期 renew 工作
+
+這部分的章節定位要放在最後，因為 renew 是在第一次 cert 成功之後才需要設定。
 
 第一次憑證申請成功後，建議立即在 Host 的 `crontab` 裡掛上一個自動續約任務，避免憑證到期後無法正常服務。這裡的重點是：不要只依靠 Certbot 容器內建的 cron；應該在 Docker 宿主機（VM / 主機）上執行 renew。
 
@@ -525,21 +598,29 @@ crontab -e
 
 ---
 
-## 6. 啟動郵件伺服器
+## 6. 維護工作：容器重啟與健檢
 
-在取得憑證後，啟動服務：
+在首次成功拿到憑證之後，接下來的工作重點不是再部署，而是定期維護：
 
-```bash
-docker compose up --build -d
-```
+- 在 cert 更新後重啟對應容器
+- 檢查容器是否正常運作
+- 觀察 Postfix / Dovecot / Nginx 的日誌
 
-如果你只是重啟服務：
+### 6.1 需要時重啟容器
+
+如果只是重啟服務：
 
 ```bash
 docker compose restart
 ```
 
-檢查容器狀態：
+如果你只是想重建並重新啟動整個環境：
+
+```bash
+docker compose up --build -d
+```
+
+檢查狀態：
 
 ```bash
 docker compose ps
@@ -559,9 +640,108 @@ docker compose logs -f nginx
 
 ---
 
-## 7. 這個 repo 啟動後會發生什麼
+### 6.2 新增/修改信箱使用者
 
-`docker-compose.yml` 會啟動兩個容器：
+新增加一個信箱使用者，基本流程是：
+
+1. 編輯 `mail_config/dovecot/users`
+2. 新增一列帳號，例如：
+
+```text
+user@example.com:{PLAIN}your-password::::::userdb_quota_rule=*:storage=100M
+```
+
+3. 重新啟動容器：
+
+```bash
+docker compose restart mail-server
+```
+
+這樣 Dovecot 就會讓新使用者登入收信。
+
+---
+
+### 6.3 修改外寄中繼設定
+
+這個 repo 內的 `mail_config/postfix/main.cf` 已經有一段範例：
+
+```text
+relayhost = [smtp-relay.brevo.com]:587
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/client_sasl_passwd
+```
+
+也就是說，若你的主機不能直接對外送信，建議使用 SMTP 中繼服務（例如 Brevo / SendGrid / 其他符合你需求的中繼服務）。
+
+請修改：
+
+- `mail_config/postfix/client_sasl_passwd`
+
+範例：
+
+```text
+[smtp-relay.brevo.com]:587 username@example.com:your-password
+```
+
+然後重新建立資料庫：
+
+```bash
+docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
+```
+
+你也可以參考 `entrypoint.sh` 內的自動處理流程。
+
+---
+
+### 6.4 常用驗證命令
+
+#### 檢查容器是否正常
+
+```bash
+docker compose ps
+```
+
+#### 檢查郵件服務狀態
+
+```bash
+docker exec -it mail-server postfix status
+```
+
+#### 檢查 Postfix 設定
+
+```bash
+docker exec -it mail-server postconf -n
+```
+
+#### 檢查 Dovecot 設定
+
+```bash
+docker exec -it mail-server dovecot -n
+```
+
+#### 看日誌
+
+```bash
+docker compose logs -f
+```
+
+#### 測試 SMTP
+
+```bash
+openssl s_client -starttls smtp -connect mail.example.com:587
+```
+
+#### 測試 IMAP
+
+```bash
+openssl s_client -connect mail.example.com:993
+```
+
+---
+
+## 7. Docker Compose 的作用
+
+`docker-compose.yml` 主要負責把整個郵件系統啟動起來，這裡會建立兩個容器：
 
 ### 7.1 `mail-server`
 
@@ -595,123 +775,22 @@ Nginx 會：
 
 ---
 
-## 8. 如何新增一個信箱使用者
-
-新增加一個信箱使用者，基本流程是：
-
-1. 編輯 `mail_config/dovecot/users`
-2. 新增一列帳號，例如：
-
-```text
-user@example.com:{PLAIN}your-password::::::userdb_quota_rule=*:storage=100M
-```
-
-3. 重新啟動容器：
-
-```bash
-docker compose restart mail-server
-```
-
-這樣 Dovecot 就會讓新使用者登入收信。
-
----
-
-## 9. 如何修改外寄中繼設定
-
-這個 repo 內的 `mail_config/postfix/main.cf` 已經有一段範例：
-
-```text
-relayhost = [smtp-relay.brevo.com]:587
-smtp_sasl_auth_enable = yes
-smtp_sasl_password_maps = hash:/etc/postfix/client_sasl_passwd
-```
-
-也就是說，若你的主機不能直接對外送信，建議使用 SMTP 中繼服務（例如 Brevo / SendGrid / 其他符合你需求的中繼服務）。
-
-請修改：
-
-- `mail_config/postfix/client_sasl_passwd`
-
-範例：
-
-```text
-[smtp-relay.brevo.com]:587 username@example.com:your-password
-```
-
-然後重新建立資料庫：
-
-```bash
-docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
-```
-
-你也可以參考 `entrypoint.sh` 內的自動處理流程。
-
----
-
-## 10. 常用驗證命令
-
-### 檢查容器是否正常
-
-```bash
-docker compose ps
-```
-
-### 檢查郵件服務狀態
-
-```bash
-docker exec -it mail-server postfix status
-```
-
-### 檢查 Postfix 設定
-
-```bash
-docker exec -it mail-server postconf -n
-```
-
-### 檢查 Dovecot 設定
-
-```bash
-docker exec -it mail-server dovecot -n
-```
-
-### 看日誌
-
-```bash
-docker compose logs -f
-```
-
-### 測試 SMTP
-
-```bash
-openssl s_client -starttls smtp -connect mail.example.com:587
-```
-
-### 測試 IMAP
-
-```bash
-openssl s_client -connect mail.example.com:993
-```
-
----
-
-## 11. 新機器部署的最簡步驟
+## 8. 新機器部署的最簡步驟
 
 如果你要在一台新主機上從頭部署，建議依照這個順序：
 
-1. 複製這個 repo 到新主機
-2. 修正 `.env`
-3. 修正 `mail_config/dovecot/users`
-4. 修正 `mail_config/aliases`
-5. 修正 `mail_config/postfix/virtualmap`
-6. 檢查 `mail_config/postfix/client_sasl_passwd` 是否已填入你的 relayhost 認證
-7. 申請 SSL 憑證：`./init_cert.sh`
-8. 啟動容器：`docker compose up --build -d`
-9. 測試收發信與 IMAP 登入
-10. 依實際需求再調整 `main.cf` 與轉寄設定
+1. 開 VM，設定 Public IP、DNS、CNAME、PTR、防火牆（25 / 80 / 587 / 993 / 995）
+2. 修正 `.env`，讓 `POSTFIX_HOST_NAME` 和 DNS 記錄一致
+3. 修正 `mail_config/dovecot/users`、`mail_config/aliases`、`mail_config/postfix/virtualmap`、`mail_config/postfix/client_sasl_passwd`
+4. 執行 `docker compose up --build -d`，讓 postfix + dovecot + nginx 先起來
+5. 以 root 身分執行 `./init_cert.sh`，申請第一份 SSL cert
+6. 在宿主機 crontab 中新增 renew 工作，讓 SSL 自動更新
+7. 測試收發信與 IMAP 登入
+8. 依實際需求再調整 `main.cf` 與轉寄設定
 
 ---
 
-## 12. 維護與除錯建議
+## 9. 維護與除錯建議
 
 - 每次修改郵件設定後，建議重新啟動 `mail-server`
 - 若你修改了 `aliases`，請執行 `newaliases`
@@ -725,7 +804,7 @@ openssl s_client -connect mail.example.com:993
 
 ---
 
-## 13. 一個簡單的總結
+## 10. 一個簡單的總結
 
 這個 repo 的核心思路很簡單：
 
@@ -750,33 +829,36 @@ openssl s_client -connect mail.example.com:993
 
 <a id="chapter-14"></a>
 
-## 14. 你可以直接照這樣做
+## 11. 你可以直接照這樣做
 
 最簡的實際操作步驟如下：
 
 ```bash
 cd mailsvr_setup
 
-# 1. 修改 .env
+# 1. 開 VM、DNS、PTR、防火牆
+# 先確認 25 / 80 / 587 / 993 / 995 可用，且 mail.example.com 能解析到這台 VM
+
+# 2. 修改 .env
 nano .env
 
-# 2. 修改信箱使用者
+# 3. 修改信箱使用者 / 別名 / 虛擬信箱 / SMTP relay 認證
 nano mail_config/dovecot/users
-
-# 3. 修改系統別名
 nano mail_config/aliases
+nano mail_config/postfix/virtualmap
+nano mail_config/postfix/client_sasl_passwd
 
-# 4. 執行第一次憑證申請
+# 4. 啟動服務（先讓 nginx / 80 可用）
+docker compose up --build -d
+
+# 5. 執行第一次憑證申請（以 root 身分執行）
 chmod +x init_cert.sh
 ./init_cert.sh
 
-# 5. 設定定期 renew（宿主機 crontab）
+# 6. 設定定期 renew（宿主機 crontab）
 crontab -e
 # 加入：
 # 0 2 * * * docker run --rm -v /home/ubuntu/mailsvr_setup/certs:/etc/letsencrypt -v /home/ubuntu/mailsvr_setup/certbot-webroot:/var/www/certbot certbot/certbot renew --webroot --webroot-path=/var/www/certbot --quiet && docker restart nginx-proxy mail-server
-
-# 6. 啟動服務
-docker compose up --build -d
 
 # 7. 查看狀態
 docker compose ps
@@ -784,11 +866,12 @@ docker compose ps
 
 這個流程的順序是：
 
-1. 先把 `.env`、信箱、別名設定完成
-2. 先成功拿到第一張 Let's Encrypt 憑證
-3. 立即設定宿主機 crontab 定期 renew
-4. 最後啟動 mail-server 與 nginx 容器
-5. 確認服務正常運作
+1. 先準備 VM / DNS / 防火牆
+2. 再修正 `.env` 和郵件設定檔
+3. 接著執行 `docker compose up --build -d`
+4. 之後以 root 身分執行 `./init_cert.sh`
+5. 最後在宿主機設定 renew cron
+6. 再確認服務正常運作
 
 如果以上步驟都可以正常完成，通常就表示你已經成功把這份 repo 轉成一個新的 mail server。這時候你還要再確認：
 

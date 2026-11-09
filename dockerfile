@@ -34,20 +34,8 @@ RUN apt-get update && apt-get upgrade -y && \
 RUN groupadd -g 5000 vmail && \
     useradd -u 5000 -g vmail -s /bin/false -d /var/vmail -m vmail
 
-# 6. 批量複製 Postfix 設定檔與系統別名檔
-COPY etc/postfix/ /etc/postfix/
-COPY etc/aliases /etc/aliases
-
-# 7. 批量複製 Dovecot 設定檔與密碼檔
-COPY etc/dovecot/conf.d/ /etc/dovecot/conf.d/
-COPY etc/dovecot/users /etc/dovecot/users
-
 # 7.1 複製 Supervisord 設定檔
 COPY etc/supervisor/supervisord.conf /etc/supervisor/supervisord.conf
-
-# 8. 調整 /etc/dovecot/users 的檔案權限與擁有者（安全性要求：root rw, dovecot ro）
-RUN chown root:dovecot /etc/dovecot/users && \
-    chmod 640 /etc/dovecot/users
 
 # 9. 複製並設定容器啟動腳本
 COPY entrypoint.sh /entrypoint.sh
