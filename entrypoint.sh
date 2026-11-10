@@ -5,9 +5,28 @@ set -e
 POSTFIX_HOST_NAME=${POSTFIX_HOST_NAME:-mailer}
 POSTFIX_DOMAIN_NAME=${POSTFIX_DOMAIN_NAME:-mydomain.com}
 
-# 2. 利用 postconf -e 動態寫入/更新 main.cf 設定
-postconf -e "myhostname = $POSTFIX_HOST_NAME"
-postconf -e "mydomain = $POSTFIX_DOMAIN_NAME"
+# 2. 原本要利用 postconf -e 動態寫入/更新 main.cf 設定
+# postconf -e "myhostname = $POSTFIX_HOST_NAME"
+# postconf -e "mydomain = $POSTFIX_DOMAIN_NAME"
+#
+# 但是, Docker 不允許容器內的行程去 delete 或 rename 一個被直接 Mount 的 Inode！
+# 當 Postfix 嘗試用 main.cf.tmp 替換 /etc/postfix/main.cf 時，Linux Kernel 會阻擋這個操作
+# 並拋出 Device or resource busy 的錯誤訊息。
+#
+# 用 sed -i 直接修改 /etc/postfix/main.cf 也會觸發 rename/Device or resource busy 的問題！
+# (因為 sed -i 會先產生一個臨時檔案，然後再 rename 覆蓋原檔案) 
+# sed -i "s/^myhostname = .*/myhostname = $POSTFIX_HOST_NAME/" /etc/postfix/main.cf
+# sed -i "s/^mydomain = .*/mydomain = $POSTFIX_DOMAIN_NAME/" /etc/postfix/main.cf
+#
+# 最終解法:
+# 1. 將更新後的內容寫到臨時記憶體或 /tmp (容器內部的非 Mount 路徑)
+sed -e "s/^myhostname = .*/myhostname = $POSTFIX_HOST_NAME/" \
+    -e "s/^mydomain = .*/mydomain = $POSTFIX_DOMAIN_NAME/" \
+    /etc/postfix/main.cf > /tmp/main.cf.new
+
+# 2. 用 cat 覆寫內容（關鍵：保持原檔案 Inode 不變，只覆寫內容）
+cat /tmp/main.cf.new > /etc/postfix/main.cf
+rm /tmp/main.cf.new
 
 # ==========================================
 # 檔案權限與擁有者自動校正 (針對 Shared Volume 掛載檔)

@@ -1,8 +1,8 @@
 # 官方的 Nginx 映像檔本身內建這個功能：只要把設定檔命名為 default.conf.template 並放在 /etc/nginx/templates/ 目錄下，
-# Nginx 在啟動時就會自動讀取系統環境變數，把裡面的 ${POSTFIX_DOMAIN_NAME} 替換掉，並自動產生正式的 default.conf！
+# Nginx 在啟動時就會自動讀取系統環境變數，把裡面的 ${POSTFIX_HOST_NAME}.${POSTFIX_DOMAIN_NAME} 替換掉，並自動產生正式的 default.conf！
 server {
     listen 80;
-    server_name ${POSTFIX_DOMAIN_NAME}; # 會自動讀取環境變數
+    server_name ${POSTFIX_HOST_NAME}.${POSTFIX_DOMAIN_NAME}; # 會自動讀取環境變數
 
     # 攔截 Let's Encrypt 驗證請求，對應到共用的 webroot 資料夾
     location /.well-known/acme-challenge/ {

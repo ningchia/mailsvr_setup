@@ -33,6 +33,8 @@
   - [4.3 修改 Postfix 虛擬郵件表](#43-修改-postfix-虛擬郵件表)
   - [4.4 執行 docker compose up 的細節](#44-執行-docker-compose-up-的細節)
 - [5. 為 mail server 申請 SSL 憑證](#5-為-mail-server-申請-ssl-憑證)
+  - [5.1 第一次申請完成後，請補上一個定期 renew 工作](#renew-ssl-cert)
+  - [5.2 使用 logrotate 自動 rotate `certbot_renew.log`](#logrotate-certbot-renew)
 - [6. 維護工作：容器重啟與健檢](#6-維護工作容器重啟與健檢)
   - [6.1 需要時重啟容器](#61-需要時重啟容器)
   - [6.2 新增/修改信箱使用者](#62-新增修改信箱使用者)
@@ -246,7 +248,7 @@ DKIM 的典型用途：
 
 <a id="azure-的反向-dnsptr-與驗證"></a>
 
-#### 4) Azure 的反向 DNS（PTR）與驗證
+#### 5) Azure 的反向 DNS（PTR）與驗證
 
 郵件伺服器很容易被忽略的地方是「反向 DNS」。反向 DNS 的目的是讓遠端郵件伺服器做 IP 反查，確認：
 
@@ -268,7 +270,7 @@ Set-AzPublicIpAddress -PublicIpAddress $pip
 
 這段意思是：
 
-1. 先抓出指定的 Public IP 物件
+1. 先抓出 Public IP 資源名稱指定的 Public IP 物件
 2. 設定它的 `ReverseFqdn`
 3. 再把變更寫回 Azure
 
@@ -283,46 +285,57 @@ myvm.eastus.cloudapp.azure.com.
 - 正向解析：`myvm.eastus.cloudapp.azure.com.` -> 對應的 Public IP
 - 反向解析：Public IP -> `myvm.eastus.cloudapp.azure.com.`
 
-如果你的郵件伺服器是 Azure VM，最常見的做法是：
+然而, 這個官方例子裡有一個地方對擁有自有網域(example.com)的使用者比較不妥的地方. 舉例說, 如果我們的 Public IP 資源名稱是 `myvm-public-ip`, 資源群組是 `my-rscgrp`, 主機在 Azure 的 DNS名稱是 `myvm.eastus.cloudapp.azure.com`, 然而正式 mail 主機在 internet 上的 URL 是 `mail.example.com`, 上述命令就會是:
 
-- `mail.example.com` 先透過 Azure DNS 的 `CNAME` 或 `A` 指向 Azure hostname
-- 然後在 Public IP 上再設定 Reverse FQDN，讓這個 IP 反查到你希望的郵件主機名
+```powershell
+$pip = Get-AzPublicIpAddress -Name "myvm-public-ip" -ResourceGroupName "my-rscgrp"
+$pip.DnsSettings.ReverseFqdn = "mail.example.com."
+Set-AzPublicIpAddress -PublicIpAddress $pip
+```
 
-這樣的配套可以讓外部郵件伺服器看到：
+> 注意事項：
+> - `ReverseFqdn` 必須使用與 DNS / Postfix 對外宣稱一致的名稱，例如 `mail.example.com.`（最後的 `.` 是必要的）。
+> - 請不要使用 `myvm.eastus.cloudapp.azure.com.` 作為 `ReverseFqdn`，再用 `CNAME` 將 `mail.example.com` 指回 `myvm.eastus.cloudapp.azure.com`。
+> - 根據網際網路標準（RFC 1912 / RFC 5321），MX 記錄不能指向 `CNAME`；它必須直接指向擁有 A 記錄的主機名稱。
+> - 若 PTR 指向 `myvm.eastus.cloudapp.azure.com`，外部郵件伺服器可能無法將它與您專屬的 Public IP 建立穩定一對一對應，進而判定為「Unverified Sender」，導致信件被放進垃圾郵件匣。
+> - 若要移除現有 Public IP 的反向 DNS 紀錄，請將 `ReverseFqdn` 設定為空字串後再存回去。
+> - Azure VM 重啟時會更換 public IP. 記得要修改 domain DNS 裡的 A 紀錄以對應到新的 public IP.
+
+透過這樣的配套可以讓外部郵件伺服器看到：
 
 ```text
-mail.example.com -> Public IP -> ReverseFqdn = myvm.eastus.cloudapp.azure.com.
+mail.example.com -> Public IP -> ReverseFqdn = mail.example.com.
 ```
 
 這和你在 DNS Zone 設定的 `MX`、`SPF`、`DMARC`、`DKIM` 相互補強，會讓郵件更容易通過收件端的驗證。
 
-若你在 Linux 端做驗證，常用命令如下：
+若你在 Linux 端做驗證，常用命令如下 (假設 public IP 是 203.0.1.2)：
 
 ```bash
 nslookup mail.example.com
-nslookup 203.0.113.10
+nslookup 203.0.1.2
 set type=ptr
-203.0.113.10
+203.0.1.2
 ```
 
 例如你在圖中的驗證結果應該會出現：
 
 ```text
-Name:   myvm.eastus.cloudapp.azure.com
-Address: 40.115.238.161
+Name:   mail.example.com
+Address: 203.0.1.2
 ```
 
 以及：
 
 ```text
 Non-authoritative answer:
-161.238.115.40.in-addr.arpa   name = mail.example.com
+2.1.0.203.in-addr.arpa   name = mail.example.com
 ```
 
 這表示：
 
-- 正向解析：`mail.example.com` -> `203.0.113.10` 正常
-- 反向解析：`203.0.113.10` -> `mail.example.com` 正常
+- 正向解析：`mail.example.com` -> `203.0.1.2` 正常
+- 反向解析：`203.0.1.2` -> `mail.example.com` 正常
 
 這對郵件系統來說很重要，因為很多收件端會檢查這個反向名稱是否符合你宣告的郵件伺服器。
 
@@ -462,7 +475,7 @@ abuse@example.com admin@example.com
 
 ```bash
 cd mailsvr_setup
-docker compose up --build -d
+sudo docker compose up --build -d
 ```
 
 這個指令的含義是：
@@ -486,25 +499,25 @@ docker compose up --build -d
 若要查看啟動狀態，可執行：
 
 ```bash
-docker compose ps
+sudo docker compose ps
 ```
 
 若要查看整個啟動過程中出現的錯誤，可執行：
 
 ```bash
-docker compose logs -f
+sudo docker compose logs -f
 ```
 
 若只看 mail-server 的日誌：
 
 ```bash
-docker compose logs -f mail-server
+sudo docker compose logs -f mail-server
 ```
 
 若只看 nginx 的日誌：
 
 ```bash
-docker compose logs -f nginx
+sudo docker compose logs -f nginx
 ```
 
 > 這一段很重要：這不是「先做 SSL」而是「先把郵件服務和 HTTP 驗證入口準備好」。只有在 80 埠與 Nginx 正常運作之後，下一步的 `init_cert.sh` 才有辦法真的申請到憑證。
@@ -513,13 +526,13 @@ docker compose logs -f nginx
 
 ## 5. 為 mail server 申請 SSL 憑證
 
-這份 repo 已經設計好 Webroot 模式，讓 Certbot 可以在公開網域上取得 SSL 憑證。這一步應該在 `docker compose up --build -d` 之後、且 nginx 已開啟 80 埠時進行。
+這份 repo 已經設計好 Webroot 模式，讓 Certbot 可以在公開網域上取得 SSL 憑證。這一步應該在 `sudo docker compose up --build -d` 之後、且 nginx 已開啟 80 埠時進行。
 
 先執行：
 
 ```bash
 chmod +x init_cert.sh
-./init_cert.sh
+sudo ./init_cert.sh
 ```
 
 這個腳本會：
@@ -545,19 +558,19 @@ chmod +x init_cert.sh
 第一次憑證申請成功後，建議立即在 Host 的 `crontab` 裡掛上一個自動續約任務，避免憑證到期後無法正常服務。這裡的重點是：不要只依靠 Certbot 容器內建的 cron；應該在 Docker 宿主機（VM / 主機）上執行 renew。
 
 ```bash
-crontab -e
+sudo crontab -e
 ```
 
 加入：
 
 ```cron
-0 2 * * * docker run --rm -v /path/to/mailsvr_setup/certs:/etc/letsencrypt -v /path/to/mailsvr_setup/certbot-webroot:/var/www/certbot certbot/certbot renew --webroot --webroot-path=/var/www/certbot --quiet && docker restart nginx-proxy mail-server
+0 2 * * * bash -c '(docker run --rm -v /path/to/mailsvr_setup/certs:/etc/letsencrypt -v /path/to/mailsvr_setup/certbot-webroot:/var/www/certbot certbot/certbot renew --webroot --webroot-path=/var/www/certbot --quiet && docker restart nginx-proxy mail-server) >> /var/log/certbot_renew.log 2>&1'
 ```
 
 請將 `/path/to/mailsvr_setup` 改成你實際 repo 的絕對路徑，例如：
 
 ```bash
-0 2 * * * docker run --rm -v /home/ubuntu/mailsvr_setup/certs:/etc/letsencrypt -v /home/ubuntu/mailsvr_setup/certbot-webroot:/var/www/certbot certbot/certbot renew --webroot --webroot-path=/var/www/certbot --quiet && docker restart nginx-proxy mail-server
+0 2 * * * bash -c '(docker run --rm -v /home/ubuntu/mailsvr_setup/certs:/etc/letsencrypt -v /home/ubuntu/mailsvr_setup/certbot-webroot:/var/www/certbot certbot/certbot renew --webroot --webroot-path=/var/www/certbot --quiet && docker restart nginx-proxy mail-server) >> /var/log/certbot_renew.log 2>&1'
 ```
 
 這個任務的目的是：
@@ -566,6 +579,7 @@ crontab -e
 - 使用 `--webroot` 與 `certbot-webroot` 來驗證域名
 - 重新更新掛載到 Host 的 `certs` 目錄
 - 在續約成功後，重啟 `nginx-proxy` 與 `mail-server` 容器，讓新憑證生效
+- 把成功或失敗的訊息寫入/var/log/certbot_renew.log
 
 #### 為什麼 Certbot 容器自動產生的 crontab 不適合在 Docker 環境中使用？
 
@@ -590,11 +604,57 @@ crontab -e
 因此，這個專案最常見且穩定的做法是：
 
 - 把 renew 任務掛在宿主機的 `crontab`
-- 由宿主機執行 `docker run certbot/certbot renew`
+- 由宿主機執行 `sudo docker run certbot/certbot renew`
 - 使用同一個 Host 目錄掛載，讓容器讀到更新後的新憑證
 - 再重啟對應容器，確保新 cert 生效
 
 > 簡單說：在 Docker 環境中，真正的執行者應該是宿主機的 cron，而不是 Certbot 容器內建的 cron。因為只有宿主機才能穩定地讀取 Host 端掛載的目錄、觸發 `docker` 指令、並協調容器重啟流程。
+
+<a id="logrotate-certbot-renew"></a>
+
+### 5.2 使用 logrotate 自動 rotate `certbot_renew.log`
+
+除了掛在 `crontab` 之後，建議也讓 `logrotate` 來管理 `/var/log/certbot_renew.log`，避免這個 renewal 日誌長期累積，最後把磁碟空間吃滿。因為我們前面設定的 cron 任務本身就是把輸出寫入 `/var/log/certbot_renew.log`，如果不做 log rotation，這個檔案會越來越大，日後排錯時也會變得很難閱讀。
+
+在宿主機上新增一個 `/etc/logrotate.d/certbot-renew`：
+
+```bash
+sudo nano /etc/logrotate.d/certbot-renew
+```
+
+寫入：
+
+```text
+/var/log/certbot_renew.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    create 644 root root
+    su root root
+}
+```
+
+這個設定的作用是：
+
+- `weekly`：每週檢查一次是否需要 rotate
+- `rotate 4`：最多保留 4 個舊 log 檔案，超過後自動刪除最舊的
+- `compress`：將舊 log 壓縮成 `.gz`，節省磁碟空間
+- `missingok`：如果 log 檔案不存在，忽略錯誤，不會中斷排程
+- `notifempty`：只有當 log 內容非空時才 rotate，避免產生空檔案
+- `create 644 root root`：建立新的 log 檔時，使用 `644` 權限，並歸屬 `root:root`
+- `su root root`：指定由 `root` 使用者來執行 rotate，確保檔案權限與日誌管理正確
+
+因此，這個設定能讓系統自動幫我們把 `/var/log/certbot_renew.log` 做周期性輪轉，維持日誌可控、可追蹤、且不會無限制增長。這對 cert renewal 的排錯、稽核與維運都非常有幫助。
+
+如果想先手動測試這個設定是否正常，可以直接執行：
+
+```bash
+sudo logrotate -f /etc/logrotate.d/certbot-renew
+```
+
+這會強制執行一次 rotate，不需要等到週期排程時間到。若設定正確，系統會立即檢查 `/var/log/certbot_renew.log` 是否需要輪轉，並依照規則建立新的 log 檔或壓縮舊檔。這樣可以先確認配置沒有語法問題，也能預先驗證日誌輪轉行為。
 
 ---
 
@@ -611,31 +671,31 @@ crontab -e
 如果只是重啟服務：
 
 ```bash
-docker compose restart
+sudo docker compose restart
 ```
 
 如果你只是想重建並重新啟動整個環境：
 
 ```bash
-docker compose up --build -d
+sudo docker compose up --build -d
 ```
 
 檢查狀態：
 
 ```bash
-docker compose ps
+sudo docker compose ps
 ```
 
 查看日誌：
 
 ```bash
-docker compose logs -f mail-server
+sudo docker compose logs -f mail-server
 ```
 
 若要查看 Nginx：
 
 ```bash
-docker compose logs -f nginx
+sudo docker compose logs -f nginx
 ```
 
 ---
@@ -654,7 +714,7 @@ user@example.com:{PLAIN}your-password::::::userdb_quota_rule=*:storage=100M
 3. 重新啟動容器：
 
 ```bash
-docker compose restart mail-server
+sudo docker compose restart mail-server
 ```
 
 這樣 Dovecot 就會讓新使用者登入收信。
@@ -686,7 +746,7 @@ smtp_sasl_password_maps = hash:/etc/postfix/client_sasl_passwd
 然後重新建立資料庫：
 
 ```bash
-docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
+sudo docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
 ```
 
 你也可以參考 `entrypoint.sh` 內的自動處理流程。
@@ -698,31 +758,31 @@ docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
 #### 檢查容器是否正常
 
 ```bash
-docker compose ps
+sudo docker compose ps
 ```
 
 #### 檢查郵件服務狀態
 
 ```bash
-docker exec -it mail-server postfix status
+sudo docker exec -it mail-server postfix status
 ```
 
 #### 檢查 Postfix 設定
 
 ```bash
-docker exec -it mail-server postconf -n
+sudo docker exec -it mail-server postconf -n
 ```
 
 #### 檢查 Dovecot 設定
 
 ```bash
-docker exec -it mail-server dovecot -n
+sudo docker exec -it mail-server dovecot -n
 ```
 
 #### 看日誌
 
 ```bash
-docker compose logs -f
+sudo docker compose logs -f
 ```
 
 #### 測試 SMTP
@@ -782,8 +842,8 @@ Nginx 會：
 1. 開 VM，設定 Public IP、DNS、CNAME、PTR、防火牆（25 / 80 / 587 / 993 / 995）
 2. 修正 `.env`，讓 `POSTFIX_HOST_NAME` 和 DNS 記錄一致
 3. 修正 `mail_config/dovecot/users`、`mail_config/aliases`、`mail_config/postfix/virtualmap`、`mail_config/postfix/client_sasl_passwd`
-4. 執行 `docker compose up --build -d`，讓 postfix + dovecot + nginx 先起來
-5. 以 root 身分執行 `./init_cert.sh`，申請第一份 SSL cert
+4. 執行 `sudo docker compose up --build -d`，讓 postfix + dovecot + nginx 先起來
+5. 執行 `sudo ./init_cert.sh`，申請第一份 SSL cert
 6. 在宿主機 crontab 中新增 renew 工作，讓 SSL 自動更新
 7. 測試收發信與 IMAP 登入
 8. 依實際需求再調整 `main.cf` 與轉寄設定
@@ -849,19 +909,22 @@ nano mail_config/postfix/virtualmap
 nano mail_config/postfix/client_sasl_passwd
 
 # 4. 啟動服務（先讓 nginx / 80 可用）
-docker compose up --build -d
+sudo docker compose up --build -d
 
 # 5. 執行第一次憑證申請（以 root 身分執行）
 chmod +x init_cert.sh
-./init_cert.sh
+sudo ./init_cert.sh
 
 # 6. 設定定期 renew（宿主機 crontab）
-crontab -e
+sudo crontab -e
 # 加入：
 # 0 2 * * * docker run --rm -v /home/ubuntu/mailsvr_setup/certs:/etc/letsencrypt -v /home/ubuntu/mailsvr_setup/certbot-webroot:/var/www/certbot certbot/certbot renew --webroot --webroot-path=/var/www/certbot --quiet && docker restart nginx-proxy mail-server
 
 # 7. 查看狀態
-docker compose ps
+sudo docker compose ps
+
+# 8. 查看log
+sudo docker compose logs -f
 ```
 
 這個流程的順序是：
@@ -869,8 +932,8 @@ docker compose ps
 1. 先準備 VM / DNS / 防火牆
 2. 再修正 `.env` 和郵件設定檔
 3. 接著執行 `docker compose up --build -d`
-4. 之後以 root 身分執行 `./init_cert.sh`
-5. 最後在宿主機設定 renew cron
+4. 執行 `sudo ./init_cert.sh`
+5. 最後在宿主機以root身分設定 renew cron
 6. 再確認服務正常運作
 
 如果以上步驟都可以正常完成，通常就表示你已經成功把這份 repo 轉成一個新的 mail server。這時候你還要再確認：

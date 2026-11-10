@@ -37,7 +37,7 @@ if [ -z "${POSTFIX_DOMAIN_NAME:-}" ]; then
     exit 1
 fi
 
-echo "=== 開始透過 Webroot 模式為 $POSTFIX_DOMAIN_NAME 申請 SSL 憑證 (管理員: $SSL_ADMIN_EMAIL) ==="
+echo "=== 開始透過 Webroot 模式為 $POSTFIX_HOST_NAME.$POSTFIX_DOMAIN_NAME 申請 SSL 憑證 (管理員: $SSL_ADMIN_EMAIL) ==="
 
 docker run -it --rm \
   -v "$SCRIPT_DIR/certs:/etc/letsencrypt" \
@@ -48,6 +48,6 @@ docker run -it --rm \
   --email "$SSL_ADMIN_EMAIL" \
   --agree-tos \
   --no-eff-email \
-  -d "$POSTFIX_DOMAIN_NAME"
+  -d "$POSTFIX_HOST_NAME.$POSTFIX_DOMAIN_NAME"
 
 echo "=== 憑證申請程序結束 ==="
