@@ -36,9 +36,24 @@ if [ -d /etc/letsencrypt ]; then
     # 將憑證根目錄權限收緊，避免私密金鑰外洩
     find /etc/letsencrypt -type d -exec chmod 755 {} +
     find /etc/letsencrypt -type f -exec chmod 644 {} +
+
     # 特別針對私密金鑰 (privkey.pem) 收緊為 600（若存在的話）
-    if [ -f /etc/letsencrypt/live/*/privkey.pem ]; then
-        chmod 600 /etc/letsencrypt/live/*/privkey.pem
+    # 直接針對 archive 目錄下的所有 privkey*.pem 設定為 600
+    if [ -d /etc/letsencrypt/archive ]; then
+        find /etc/letsencrypt/archive -name "privkey*.pem" -exec chmod 600 {} +
+        echo "已將私密金鑰權限收緊為 600"
+    fi
+    
+    # 建立指向目標網域憑證目錄的固定符號連結 (mail-current)
+    TARGET_CERT_DIR="/etc/letsencrypt/live/${POSTFIX_HOST_NAME}.${POSTFIX_DOMAIN_NAME}"
+    FIXED_SYMLINK="/etc/letsencrypt/live/mail-current"
+
+    if [ -d "$TARGET_CERT_DIR" ]; then
+        # 如果符號連結已存在則強制更新，若不存在則建立
+        ln -sfn "$TARGET_CERT_DIR" "$FIXED_SYMLINK"
+        echo "已成功建立或更新憑證符號連結: $FIXED_SYMLINK -> $TARGET_CERT_DIR"
+    else
+        echo "警告: 找不到目標憑證目錄 $TARGET_CERT_DIR，無法建立符號連結。"
     fi
 fi
 

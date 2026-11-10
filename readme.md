@@ -813,17 +813,27 @@ openssl s_client -connect mail.example.com:993
 - 設定檔掛載
 - 憑證路徑掛載
 
-啟動時，`entrypoint.sh` 會執行：
+啟動時，`entrypoint.sh` 會先把環境變數寫回 Postfix 的 `main.cf`，但不是直接使用 `postconf -e`，因為在 Docker 掛載設定檔的情況下，直接覆寫 `main.cf` 可能會碰到 `device or resource busy` 的問題。實際做法是：
 
 ```bash
-postconf -e "myhostname = $POSTFIX_HOST_NAME"
-postconf -e "mydomain = $POSTFIX_DOMAIN_NAME"
+sed -e "s/^myhostname = .*/myhostname = $POSTFIX_HOST_NAME/" \
+    -e "s/^mydomain = .*/mydomain = $POSTFIX_DOMAIN_NAME/" \
+    /etc/postfix/main.cf > /tmp/main.cf.new
+
+cat /tmp/main.cf.new > /etc/postfix/main.cf
+rm /tmp/main.cf.new
+
 postmap /etc/postfix/virtualmap
 postmap /etc/postfix/client_sasl_passwd
 newaliases
 ```
 
-也就是說，容器啟動時會把現在的環境值寫進 Postfix 的 `main.cf`。
+這樣做的目的，是在保持掛載檔案可寫性與避免 inode 變更衝突的前提下，把目前的 `POSTFIX_HOST_NAME` / `POSTFIX_DOMAIN_NAME` 正確寫入 `main.cf`。這裡的重點還有兩個：
+
+- 會同步修正容器內掛載檔案的權限與擁有者，例如 Postfix 設定檔、Dovecot 使用者檔、SSL 憑證與私鑰，以避免 Docker volume 掛載後因權限不足導致服務無法讀取。
+- 會建立固定的憑證連結目錄（例如 `mail-current`），讓服務可以穩定指向目前最新的 Let's Encrypt 憑證目錄，而不會因為憑證資料夾版本不同或路徑改變而出錯。
+
+也就是說，`entrypoint.sh` 不只是寫入 hostname / domain，它同時負責維持容器內掛載檔案的正確權限，以及讓 SSL 憑證路徑能被 Postfix / Dovecot 一致地引用。
 
 ### 7.2 `nginx`
 

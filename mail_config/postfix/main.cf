@@ -67,9 +67,11 @@ mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
 # 5. 重啟 Postfix: systemctl restart postfix (or postfix reload)
 # 6. Let's Encrypt 憑證效期為 90 天，系統會透過 cron 自動在到期前 30 天進行續期。
 
-# TLS 參數設定（正式環境建議替換為 Let's Encrypt 正式憑證路徑）
-smtpd_tls_cert_file = /etc/letsencrypt/live/$mydomain/fullchain.pem
-smtpd_tls_key_file = /etc/letsencrypt/live/$mydomain/privkey.pem
+# TLS 參數設定
+# Let's Encrypt 正式憑證路徑是 /etc/letsencrypt/live/hostname.domainname/.
+# 我們在 entrypoint.sh 裡建立一個 symbolic link /etc/letsencrypt/live/mail-current/ 來連結到它.
+smtpd_tls_cert_file = /etc/letsencrypt/live/mail-current/fullchain.pem
+smtpd_tls_key_file = /etc/letsencrypt/live/mail-current/privkey.pem
 
 # 強制要求全面採用 TLS 加密連線 (取代過時的 smtpd_use_tls = yes)
 smtpd_tls_security_level = encrypt
