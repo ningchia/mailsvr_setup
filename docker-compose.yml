@@ -32,7 +32,7 @@ services:
       - ./mail_config/dovecot/conf.d/10-master.conf:/etc/dovecot/conf.d/10-master.conf
       - ./mail_config/dovecot/conf.d/10-ssl.conf:/etc/dovecot/conf.d/10-ssl.conf
       - ./mail_config/dovecot/conf.d/20-pop3.conf:/etc/dovecot/conf.d/20-pop3.conf
-      - ./mail_config/dovecot/conf.d/auth-passwd.conf.ext:/etc/dovecot/conf.d/auth-passwd.conf.ext
+      - ./mail_config/dovecot/conf.d/auth-passwdfile.conf.ext:/etc/dovecot/conf.d/auth-passwdfile.conf.ext
       - ./mail_config/dovecot/users:/etc/dovecot/users
     restart: always
 

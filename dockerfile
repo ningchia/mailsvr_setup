@@ -32,7 +32,7 @@ RUN apt-get update && apt-get upgrade -y && \
 # -s /bin/false: 禁止登入 shell
 # -d /var/vmail: 指定信箱根目錄
 RUN groupadd -g 5000 vmail && \
-    useradd -u 5000 -g vmail -s /bin/false -d /var/vmail -m vmail
+    useradd -u 5000 -g vmail -s /bin/false -d /home/vmail -m vmail
 
 # 7.1 複製 Supervisord 設定檔
 COPY etc/supervisor/supervisord.conf /etc/supervisor/supervisord.conf
