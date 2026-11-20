@@ -23,29 +23,23 @@
   - [Azure NSG / 防火牆要開放](#azure-nsg--防火牆要開放)
 - [3. 修正 .env 與郵件設定檔](#3-修正-env-與郵件設定檔)
   - [3.1 .env](#31-env)
-  - [3.2 設定 `mail_config/dovecot/users`](#32-設定-mail_configdovecotusers)
-  - [3.3 設定 `mail_config/aliases`](#33-設定-mail_configaliases)
-  - [3.4 設定 `mail_config/postfix/virtualmap`](#34-設定-mail_configpostfixvirtualmap)
-  - [3.5 設定 `mail_config/postfix/client_sasl_passwd`](#35-設定-mail_configpostfixclient_sasl_passwd)
+  - [3.2 新增/修改收信帳號](#32-新增修改收信帳號)
+  - [3.3 修改管理別名](#33-修改管理別名)
+  - [3.4 修改 Postfix 虛擬郵件表](#34-修改-postfix-虛擬郵件表)
+  - [3.5 修改外寄中繼設定](#35-修改外寄中繼設定)
 - [4. 啟動 postfix, dovecot, nginx](#4-啟動-postfix-dovecot-nginx)
-  - [4.1 新增/修改收信帳號](#41-新增修改收信帳號)
-  - [4.2 修改管理別名](#42-修改管理別名)
-  - [4.3 修改 Postfix 虛擬郵件表](#43-修改-postfix-虛擬郵件表)
-  - [4.4 修改外寄中繼設定](#44-修改外寄中繼設定)
-  - [4.5 執行 docker compose up 的細節](#45-執行-docker-compose-up-的細節)
 - [5. 為 mail server 申請 SSL 憑證](#5-為-mail-server-申請-ssl-憑證)
-  - [5.1 第一次申請完成後，請補上一個定期 renew 工作](#renew-ssl-cert)
-  - [5.2 使用 logrotate 自動 rotate `certbot_renew.log`](#logrotate-certbot-renew)
+  - [5.1 憑證申請後重新啟動 Postfix 與 Dovecot](#51-憑證申請後重新啟動-postfix與dovecot)
+  - [5.2 第一次申請完成後，請補上一個定期 renew 工作](#renew-ssl-cert)
+  - [5.3 使用 logrotate 自動 rotate `certbot_renew.log`](#logrotate-certbot-renew)
 - [6. 維護工作：容器重啟與健檢](#6-維護工作容器重啟與健檢)
   - [6.1 需要時重啟容器](#61-需要時重啟容器)
   - [6.2 新增/修改信箱使用者](#62-新增修改信箱使用者)
   - [6.3 測試期間開啟 Postfix 與 Dovecot 日誌](#63-測試期間開啟-postfix與dovecot日誌)
   - [6.4 常用驗證命令](#64-常用驗證命令)
 - [7. Docker Compose 的作用](#7-docker-compose-的作用)
-- [8. 新機器部署的最簡步驟](#8-新機器部署的最簡步驟)
-- [9. 維護與除錯建議](#9-維護與除錯建議)
-- [10. 一個簡單的總結](#10-一個簡單的總結)
-- [11. 你可以直接照這樣做](#11-你可以直接照這樣做)
+- [8. 一個簡單的總結](#8-一個簡單的總結)
+- [9. 你可以直接照這樣做](#9-你可以直接照這樣做)
 
 ### 目錄結構
 
@@ -386,6 +380,8 @@ Non-authoritative answer:
 
 在開好 VM / DNS / 防火牆後，下一步就是先把郵件相關設定檔修好。這一步要先完成，因為後續 `docker compose up`、`init_cert.sh` 都依賴這些值。
 
+### 3.1 .env
+
 進入專案目錄後，修改 `.env`：
 
 ```bash
@@ -409,15 +405,7 @@ SSL_ADMIN_EMAIL=admin@example.com
 
 這些參數會在容器啟動時由 `entrypoint.sh` 注入 Postfix 設定中。
 
----
-
-## 4. 啟動 postfix, dovecot, nginx
-
-在 `.env` 與 `mail_config` 設定完成後，先把 docker compose 啟動起來。這裡的目的不是先申請 cert，而是先讓 nginx / 80 / ACME challenge 能跑起來，讓後續的首次證書申請有 HTTP 入口。
-
-這個 repo 內有幾個你必須先確認的設定檔。
-
-### 4.1 新增/修改收信帳號
+### 3.2 新增/修改收信帳號
 
 檔案：`mail_config/dovecot/users`
 
@@ -435,7 +423,9 @@ admin@example.com:{PLAIN}StrongPassword123::::::userdb_quota_rule=*:storage=100M
 
 這樣做之後，Dovecot 就會讓這個帳號能夠收信與登入 IMAP/POP3。
 
-### 4.2 修改管理別名
+---
+
+### 3.3 修改管理別名
 
 檔案：`mail_config/aliases`
 
@@ -455,7 +445,9 @@ root:       admin@example.com
 
 如果你想接收 root / postmaster 的信件，這裡很重要。
 
-### 4.3 修改 Postfix 虛擬郵件表
+---
+
+### 3.4 修改 Postfix 虛擬郵件表
 
 檔案：`mail_config/postfix/virtualmap`
 
@@ -470,7 +462,7 @@ abuse@example.com admin@example.com
 
 ---
 
-### 4.4 修改外寄中繼設定
+### 3.5 修改外寄中繼設定
 
 這個 repo 內的 `mail_config/postfix/main.cf` 已經有一段範例：
 
@@ -494,17 +486,11 @@ smtp_sasl_password_maps = hash:/etc/postfix/client_sasl_passwd
 
 > **注意：** 這裡的 `your-password` **不是 Brevo 帳號的登入密碼**，而是另外建立的 **Brevo SMTP key**（SMTP key / SMTP password）。請到 Brevo SMTP 設定頁建立或取得 SMTP key，並在此填入該 key；前面的 `username@example.com` 則依 Brevo 提供的 SMTP username 填寫。
 
-然後重新建立資料庫：
-
-```bash
-sudo docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
-```
-
-你也可以參考 `entrypoint.sh` 內的自動處理流程。
-
 ---
 
-### 4.5 執行 docker compose up 的細節
+## 4. 啟動 postfix, dovecot, nginx
+
+在 `.env` 與 `mail_config` 設定完成後，先把 docker compose 啟動起來。這裡的目的不是先申請 cert，而是先讓 nginx / 80 / ACME challenge 能跑起來，讓後續的首次證書申請有 HTTP 入口。
 
 在前面的設定都確認無誤後，正式啟動服務前，通常會在專案目錄中執行：
 
@@ -556,6 +542,8 @@ sudo docker compose logs -f nginx
 ```
 
 > 這一段很重要：這不是「先做 SSL」而是「先把郵件服務和 HTTP 驗證入口準備好」。只有在 80 埠與 Nginx 正常運作之後，下一步的 `init_cert.sh` 才有辦法真的申請到憑證。
+>
+> **注意事項：** 第一次啟動時，若日誌中出現 Postfix 或 Dovecot 因為無法開啟 SSL 憑證檔案或 private key 而啟動失敗，這是正常情況，因為第一次啟動時尚未申請到憑證。請先依下一章的流程執行 `init_cert.sh` 完成第一次憑證申請，然後使用 `sudo docker compose restart` 重新啟動容器，Postfix 與 Dovecot 即可正常載入憑證。
 
 ---
 
@@ -584,9 +572,26 @@ sudo ./init_cert.sh
 > - 80 埠是否已開放
 > - `.env` 中的 `POSTFIX_DOMAIN_NAME` 和 `SSL_ADMIN_EMAIL` 是否正確
 
+### 5.1 憑證申請後重新啟動 Postfix 與 Dovecot
+
+第一次憑證申請成功後，請重新啟動 Docker Compose 服務，讓 Postfix 與 Dovecot 載入新取得的 SSL 憑證與 private key：
+
+```bash
+sudo docker compose restart
+```
+
+重啟後可確認容器狀態與日誌：
+
+```bash
+sudo docker compose ps
+sudo docker compose logs --tail 200 mail-server
+```
+
+若日誌中不再出現「無法開啟憑證檔案」或「無法載入 private key」等錯誤，就表示 Postfix 與 Dovecot 已成功讀取憑證。此步驟特別適用於第一次啟動時尚未申請憑證、因此 Postfix 或 Dovecot 因找不到 SSL 檔案而失敗的情況。
+
 <a id="renew-ssl-cert"></a>
 
-### 5.1 第一次申請完成後，請補上一個定期 renew 工作
+### 5.2 第一次申請完成後，請補上一個定期 renew 工作
 
 這部分的章節定位要放在最後，因為 renew 是在第一次 cert 成功之後才需要設定。
 
@@ -647,7 +652,7 @@ sudo crontab -e
 
 <a id="logrotate-certbot-renew"></a>
 
-### 5.2 使用 logrotate 自動 rotate `certbot_renew.log`
+### 5.3 使用 logrotate 自動 rotate `certbot_renew.log`
 
 除了掛在 `crontab` 之外，建議也讓 `logrotate` 來管理 `/var/log/certbot_renew.log`，避免這個 renewal 日誌長期累積，最後把磁碟空間吃滿。因為我們前面設定的 cron 任務本身就是把輸出寫入 `/var/log/certbot_renew.log`，如果不做 log rotation，這個檔案會越來越大，日後排錯時也會變得很難閱讀。
 
@@ -938,12 +943,13 @@ postmap /etc/postfix/client_sasl_passwd
 newaliases
 ```
 
-這樣做的目的，是在保持掛載檔案可寫性與避免 inode 變更衝突的前提下，把目前的 `POSTFIX_HOST_NAME` / `POSTFIX_DOMAIN_NAME` 正確寫入 `main.cf`。這裡的重點還有兩個：
+這樣做的目的，是在保持掛載檔案可寫性與避免 inode 變更衝突的前提下，把目前的 `POSTFIX_HOST_NAME` / `POSTFIX_DOMAIN_NAME` 正確寫入 `main.cf`。
 
-- 會同步修正容器內掛載檔案的權限與擁有者，例如 Postfix 設定檔、Dovecot 使用者檔、SSL 憑證與私鑰，以避免 Docker volume 掛載後因權限不足導致服務無法讀取。
-- 會建立固定的憑證連結目錄（例如 `mail-current`），讓服務可以穩定指向目前最新的 Let's Encrypt 憑證目錄，而不會因為憑證資料夾版本不同或路徑改變而出錯。
+此外，`entrypoint.sh` 還會額外處理以下三件事：
 
-也就是說，`entrypoint.sh` 不只是寫入 hostname / domain，它同時負責維持容器內掛載檔案的正確權限，以及讓 SSL 憈證路徑能被 Postfix / Dovecot 一致地引用。
+- 同步修正容器內掛載檔案的權限與擁有者，例如 Postfix 設定檔、Dovecot 使用者檔、SSL 憑證與私鑰，以避免 Docker volume 掛載後因權限不足導致服務無法讀取。
+- 建立固定的憑證連結目錄（例如 `mail-current`），讓服務可以穩定指向目前最新的 Let's Encrypt 憑證路徑，而不會因為憑證資料夾版本不同或路徑改變而出錯。
+- 將 `/etc/resolv.conf` 等網路與 DNS 設定複製到 Postfix 的 chroot 環境 `/var/spool/postfix/etc/`，讓 Postfix 在 chroot 中也能解析 `relayhost` 的主機名稱並找到其 IP 位址。
 
 ### 7.2 `nginx`
 
@@ -955,36 +961,7 @@ Nginx 會：
 
 ---
 
-## 8. 新機器部署的最簡步驟
-
-如果你要在一台新主機上從頭部署，建議依照這個順序：
-
-1. 開 VM，設定 Public IP、DNS、CNAME、PTR、防火牆（25 / 80 / 587 / 993 / 995）
-2. 修正 `.env`，讓 `POSTFIX_HOST_NAME` 和 DNS 記錄一致
-3. 修正 `mail_config/dovecot/users`、`mail_config/aliases`、`mail_config/postfix/virtualmap`、`mail_config/postfix/client_sasl_passwd`
-4. 執行 `sudo docker compose up --build -d`，讓 postfix + dovecot + nginx 先起來
-5. 執行 `sudo ./init_cert.sh`，申請第一份 SSL cert
-6. 在宿主機 crontab 中新增 renew 工作，讓 SSL 自動更新
-7. 測試收發信與 IMAP 登入
-8. 依實際需求再調整 `main.cf` 與轉寄設定
-
----
-
-## 9. 維護與除錯建議
-
-- 每次修改郵件設定後，建議重新啟動 `mail-server`
-- 若你修改了 `aliases`，請執行 `newaliases`
-- 若你修改了 Postfix 引用的 map 檔，請重新 `postmap`
-- 若你新增了使用者，請確認 Dovecot 的帳密檔格式正確
-- 若 SMTP 無法寄信，優先檢查：
-  - 25/587 是否開放
-  - `relayhost` 是否正確
-  - SASL 密碼檔是否正確
-  - DNS 與 MX 設定是否可解析
-
----
-
-## 10. 一個簡單的總結
+## 8. 一個簡單的總結
 
 這個 repo 的核心思路很簡單：
 
@@ -1007,9 +984,7 @@ Nginx 會：
 
 ---
 
-<a id="chapter-14"></a>
-
-## 11. 你可以直接照這樣做
+## 9. 你可以直接照這樣做
 
 最簡的實際操作步驟如下：
 
@@ -1035,15 +1010,18 @@ sudo docker compose up --build -d
 chmod +x init_cert.sh
 sudo ./init_cert.sh
 
-# 6. 設定定期 renew（宿主機 crontab）
+# 6. 重新啟動容器讓 Postfix 與 Dovecot 正常載入憑證。
+sudo docker compose restart
+
+# 7. 設定定期 renew（宿主機 crontab）
 sudo crontab -e
 # 加入：
 # 0 2 * * * docker run --rm -v /home/ubuntu/mailsvr_setup/certs:/etc/letsencrypt -v /home/ubuntu/mailsvr_setup/certbot-webroot:/var/www/certbot certbot/certbot renew --webroot --webroot-path=/var/www/certbot --quiet && docker restart nginx-proxy mail-server
 
-# 7. 查看狀態
+# 8. 查看狀態
 sudo docker compose ps
 
-# 8. 查看log
+# 9. 查看log
 sudo docker compose logs -f
 ```
 
@@ -1051,16 +1029,15 @@ sudo docker compose logs -f
 
 1. 先準備 VM / DNS / 防火牆
 2. 再修正 `.env` 和郵件設定檔
-3. 接著執行 `docker compose up --build -d`
-4. 執行 `sudo ./init_cert.sh`
-5. 最後在宿主機以root身分設定 renew cron
-6. 再確認服務正常運作
+3. 接著執行 `sudo docker compose up --build -d`
+4. 執行 `sudo ./init_cert.sh` 第一次申請憑證
+5. 執行 `sudo docker compose restart` 讓 postfix 與 dovecot 載入憑證.
+6. 最後在宿主機以root身分設定 renew cron
+7. 再確認服務正常運作
 
-如果以上步驟都可以正常完成，通常就表示你已經成功把這份 repo 轉成一個新的 mail server。這時候你還要再確認：
+如果以上步驟都可以正常完成，通常就表示你已經成功把這份 repo 轉成一個新的 mail server。若有問題時請開啟 postfix 與 dovecot 的 debug log, 並且再確認：
 
-- DNS：`MX`、`SPF`、`DMARC`、`DKIM` 正確
+- DNS：`A`、`MX`、`SPF`、`DMARC`、`DKIM` 是否符合 Relay host 需求
 - 反向 DNS：Azure Public IP 的 Reverse FQDN 正確設定
-- 安全群組：25 / 587 / 465 / 993 等埠能對外
-- Email 轉寄與 relayhost：沒有設定錯誤
-
-也就是說，第一次憑證申請只是開始，真正維持 mail server 長期穩定的關鍵，是「憑證 renew」與「DNS / 反向 DNS / 防火牆」同步處理。
+- 安全群組：25 / 80 / 587 / 465 / 993 / 995 等埠能對外
+- Email 轉寄的 relayhost 帳號：沒有設定錯誤
