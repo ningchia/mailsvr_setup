@@ -5,6 +5,12 @@
 # 2. 每次修改完 main.cf 後，務必執行 "postfix reload" 或 "systemctl restart postfix" 讓變更生效。
 # 3. 除了直接編輯本檔案外，也可以透過指令動態修改，例如："postconf -e 'home_mailbox = Maildir/'"
 
+# @LC@
+# 需要 debug postfix 時, 由於我們在容器內是使用 supervisord 而非 systemd 作為 pid 1, 
+# 意思是容器內沒有 journald 來接收 postfix 的log. 在這裡就明確的要 postfix 寫到指定的檔案路徑.
+# 平常請關掉, 因為我們沒有在容器內部署 logrotated 管控log file 的大小 與自動 rotate.
+# maillog_file = /var/log/postfix.log
+
 # ==========================================
 # 基本宣告與版本控制
 # ==========================================

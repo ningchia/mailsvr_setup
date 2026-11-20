@@ -31,14 +31,15 @@
   - [4.1 新增/修改收信帳號](#41-新增修改收信帳號)
   - [4.2 修改管理別名](#42-修改管理別名)
   - [4.3 修改 Postfix 虛擬郵件表](#43-修改-postfix-虛擬郵件表)
-  - [4.4 執行 docker compose up 的細節](#44-執行-docker-compose-up-的細節)
+  - [4.4 修改外寄中繼設定](#44-修改外寄中繼設定)
+  - [4.5 執行 docker compose up 的細節](#45-執行-docker-compose-up-的細節)
 - [5. 為 mail server 申請 SSL 憑證](#5-為-mail-server-申請-ssl-憑證)
   - [5.1 第一次申請完成後，請補上一個定期 renew 工作](#renew-ssl-cert)
   - [5.2 使用 logrotate 自動 rotate `certbot_renew.log`](#logrotate-certbot-renew)
 - [6. 維護工作：容器重啟與健檢](#6-維護工作容器重啟與健檢)
   - [6.1 需要時重啟容器](#61-需要時重啟容器)
   - [6.2 新增/修改信箱使用者](#62-新增修改信箱使用者)
-  - [6.3 修改外寄中繼設定](#63-修改外寄中繼設定)
+  - [6.3 測試期間開啟 Postfix 與 Dovecot 日誌](#63-測試期間開啟-postfix與dovecot日誌)
   - [6.4 常用驗證命令](#64-常用驗證命令)
 - [7. Docker Compose 的作用](#7-docker-compose-的作用)
 - [8. 新機器部署的最簡步驟](#8-新機器部署的最簡步驟)
@@ -469,7 +470,41 @@ abuse@example.com admin@example.com
 
 ---
 
-### 4.4 執行 docker compose up 的細節
+### 4.4 修改外寄中繼設定
+
+這個 repo 內的 `mail_config/postfix/main.cf` 已經有一段範例：
+
+```text
+relayhost = [smtp-relay.brevo.com]:587
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/client_sasl_passwd
+```
+
+也就是說，若你的主機不能直接對外送信，建議使用 SMTP 中繼服務（例如 Brevo / SendGrid / 其他符合你需求的中繼服務）。
+
+請修改：
+
+- `mail_config/postfix/client_sasl_passwd`
+
+範例：
+
+```text
+[smtp-relay.brevo.com]:587 username@example.com:your-password
+```
+
+> **注意：** 這裡的 `your-password` **不是 Brevo 帳號的登入密碼**，而是另外建立的 **Brevo SMTP key**（SMTP key / SMTP password）。請到 Brevo SMTP 設定頁建立或取得 SMTP key，並在此填入該 key；前面的 `username@example.com` 則依 Brevo 提供的 SMTP username 填寫。
+
+然後重新建立資料庫：
+
+```bash
+sudo docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
+```
+
+你也可以參考 `entrypoint.sh` 內的自動處理流程。
+
+---
+
+### 4.5 執行 docker compose up 的細節
 
 在前面的設定都確認無誤後，正式啟動服務前，通常會在專案目錄中執行：
 
@@ -614,7 +649,7 @@ sudo crontab -e
 
 ### 5.2 使用 logrotate 自動 rotate `certbot_renew.log`
 
-除了掛在 `crontab` 之後，建議也讓 `logrotate` 來管理 `/var/log/certbot_renew.log`，避免這個 renewal 日誌長期累積，最後把磁碟空間吃滿。因為我們前面設定的 cron 任務本身就是把輸出寫入 `/var/log/certbot_renew.log`，如果不做 log rotation，這個檔案會越來越大，日後排錯時也會變得很難閱讀。
+除了掛在 `crontab` 之外，建議也讓 `logrotate` 來管理 `/var/log/certbot_renew.log`，避免這個 renewal 日誌長期累積，最後把磁碟空間吃滿。因為我們前面設定的 cron 任務本身就是把輸出寫入 `/var/log/certbot_renew.log`，如果不做 log rotation，這個檔案會越來越大，日後排錯時也會變得很難閱讀。
 
 在宿主機上新增一個 `/etc/logrotate.d/certbot-renew`：
 
@@ -721,35 +756,100 @@ sudo docker compose restart mail-server
 
 ---
 
-### 6.3 修改外寄中繼設定
+### 6.3 測試期間開啟 Postfix 與 Dovecot 日誌
 
-這個 repo 內的 `mail_config/postfix/main.cf` 已經有一段範例：
+測試期間可以透過以下方式取得較詳細的郵件與登入紀錄。這兩種設定只建議在除錯期間啟用，不應長期開啟，因為本專案容器內沒有針對這些檔案設定 logrotate，日誌可能持續增長。
 
-```text
-relayhost = [smtp-relay.brevo.com]:587
-smtp_sasl_auth_enable = yes
-smtp_sasl_password_maps = hash:/etc/postfix/client_sasl_passwd
-```
+#### 1. 開啟 Postfix 日誌
 
-也就是說，若你的主機不能直接對外送信，建議使用 SMTP 中繼服務（例如 Brevo / SendGrid / 其他符合你需求的中繼服務）。
-
-請修改：
-
-- `mail_config/postfix/client_sasl_passwd`
-
-範例：
+編輯 `mail_config/postfix/main.cf`，將下列參數取消註解：
 
 ```text
-[smtp-relay.brevo.com]:587 username@example.com:your-password
+maillog_file = /var/log/postfix.log
 ```
 
-然後重新建立資料庫：
+套用設定並重啟容器：
 
 ```bash
-sudo docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
+sudo docker compose restart mail-server
 ```
 
-你也可以參考 `entrypoint.sh` 內的自動處理流程。
+也可以先進入容器驗證設定是否載入：
+
+```bash
+sudo docker exec -it mail-server postconf maillog_file
+sudo docker exec -it mail-server postfix reload
+```
+
+查看即時 Postfix 日誌：
+
+```bash
+sudo docker exec -it mail-server tail -f /var/log/postfix.log
+```
+
+如需保留較長時間、在測試結束後再檢查，可改用：
+
+```bash
+sudo docker exec -it mail-server grep -iE 'error|warning|fatal|reject|relay|status=' /var/log/postfix.log
+```
+
+#### 2. 開啟 Dovecot 日誌
+
+編輯 `mail_config/dovecot/conf.d/10-logging.conf`。測試登入問題時可以啟用：
+
+```text
+auth_verbose = yes
+auth_debug = yes
+```
+
+若需要把 Dovecot 資訊與除錯紀錄寫入指定檔案，可取消下列註解：
+
+```text
+log_path = /var/log/dovecot.log
+info_log_path = /var/log/dovecot.log
+debug_log_path = /var/log/dovecot.log
+```
+
+套用設定：
+
+```bash
+sudo docker compose restart mail-server
+```
+
+查看即時 Dovecot 日誌：
+
+```bash
+sudo docker exec -it mail-server tail -f /var/log/dovecot.log
+```
+
+本專案的 Dovecot 設定目前已有 `auth_debug=yes`。如果 `10-logging.conf` 中同時有 `auth_debug_passwords=yes`，請只在短時間除錯且確認容器無外部存取時使用，因為它可能記錄密碼相關資訊；測試結束後應改回：
+
+```text
+auth_verbose_passwords = no
+auth_debug_passwords = no
+```
+
+#### 3. 不使用指定檔案時，直接查看容器日誌
+
+Supervisor 已將 Postfix 與 Dovecot 的輸出導向容器 stdout/stderr，因此也可以直接執行：
+
+```bash
+sudo docker compose logs -f mail-server
+```
+
+只查看最近 200 行：
+
+```bash
+sudo docker compose logs --tail 200 mail-server
+```
+
+過濾包含特定帳號、網域或錯誤的日誌：
+
+```bash
+sudo docker compose logs mail-server | grep -iE 'authentication|warning|error|postfix|dovecot'
+```
+
+> 測試完成後請取消不必要的檔案日誌與除錯參數，再執行 `sudo docker compose restart mail-server`。特別是不要保留 `auth_debug_passwords=yes` 或將認證日誌輸出成公開可讀檔案。若容器內的 `/var/log/postfix.log` 或 `/var/log/dovecot.log` 已經增長過大，可刪除該檔案並重啟容器讓服務重新建立新檔案；正式環境應另外設定 logrotate。
 
 ---
 
@@ -760,6 +860,16 @@ sudo docker exec -it mail-server postmap /etc/postfix/client_sasl_passwd
 ```bash
 sudo docker compose ps
 ```
+
+#### 進入容器內部
+
+如果需要在容器內執行其他指令或檢查設定：
+
+```bash
+sudo docker exec -it mail-server /bin/bash
+```
+
+完成後執行 `exit` 離開容器。
 
 #### 檢查郵件服務狀態
 
@@ -833,7 +943,7 @@ newaliases
 - 會同步修正容器內掛載檔案的權限與擁有者，例如 Postfix 設定檔、Dovecot 使用者檔、SSL 憑證與私鑰，以避免 Docker volume 掛載後因權限不足導致服務無法讀取。
 - 會建立固定的憑證連結目錄（例如 `mail-current`），讓服務可以穩定指向目前最新的 Let's Encrypt 憑證目錄，而不會因為憑證資料夾版本不同或路徑改變而出錯。
 
-也就是說，`entrypoint.sh` 不只是寫入 hostname / domain，它同時負責維持容器內掛載檔案的正確權限，以及讓 SSL 憑證路徑能被 Postfix / Dovecot 一致地引用。
+也就是說，`entrypoint.sh` 不只是寫入 hostname / domain，它同時負責維持容器內掛載檔案的正確權限，以及讓 SSL 憈證路徑能被 Postfix / Dovecot 一致地引用。
 
 ### 7.2 `nginx`
 

@@ -81,10 +81,21 @@ postmap /etc/postfix/virtualmap
 postmap /etc/postfix/client_sasl_passwd
 newaliases
 
-# 4. 確保 supervisor 日誌與運行目錄存在
+# 4. 同步網路與 DNS 解析設定至 Postfix chroot 環境 (postfix 會 chroot 到 /var/spool/postfix 運行)
+if [ -d /var/spool/postfix ]; then
+    mkdir -p /var/spool/postfix/etc
+    for file in resolv.conf hosts services nsswitch.conf localtime; do
+        if [ -f "/etc/$file" ]; then
+            cp -f "/etc/$file" "/var/spool/postfix/etc/$file"
+        fi
+    done
+    echo "已將網路與 DNS 設定同步至 Postfix chroot 目錄"
+fi
+
+# 5. 確保 supervisor 日誌與運行目錄存在
 mkdir -p /var/log/supervisor
 
-# 5. 啟動 Supervisord 主行程（由 CMD 帶入命令）
+# 6. 啟動 Supervisord 主行程（由 CMD 帶入命令）
 # $@ 代表傳遞給這個腳本的所有命令列參數.
 # exec 會用新的行程（也就是 supervisord）完全取代原本的 Shell 腳本行程（PID 1）。
 # 這讓 supervisord 能夠直接接收來自 Docker 的訊號（例如 docker stop 的 SIGTERM），確保容器能正常 graceful shutdown。
